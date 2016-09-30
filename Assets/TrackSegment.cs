@@ -6,13 +6,20 @@ public class TrackSegment : MonoBehaviour {
     // Bezier control points (in same coordinate system as start and end points)
     public Vector3 control_a, control_b;
     public Vector3 up_a, up_b;
-    public float width = 1.0f;
+    public float width = 1.0f, height = 0.5f;
     public int n_points = 20;
 
-    Mesh mesh;
-    Vector3[] verts;
-    int[] tris;
-    Vector3[] normals;
+    const int vverts_per_point = 2;
+    const int vtris_per_point = vverts_per_point * 6;
+    Mesh vmesh;
+    Vector3[] vverts, normals;
+    int[] vtris;
+
+    const int pverts_per_point = 4;
+    const int ptris_per_point = pverts_per_point * 6;
+    Mesh pmesh;
+    Vector3[] pverts;
+    int[] ptris;
 
     // Get track centreline at parametric coord t, based on the control and endpoints.
     Vector3 GetBezier(float t)  {
@@ -24,35 +31,40 @@ public class TrackSegment : MonoBehaviour {
         return s * s * s * pos_a + 3 * s * s * t * control_a + 3 * s * t * t * control_b + t * t * t * pos_b;
     }
 
-	void Start () {
-        const int verts_per_point = 2;
-        const int tris_per_point = verts_per_point * 3;
-        MeshFilter mf = gameObject.GetComponent<MeshFilter>();
-        mesh = new Mesh();
-        mf.mesh = mesh;
+    // Create a hollow tube of "size" verts per point, where "stride" is the total number of vertices per point.
+    void TriangleLoop(int[] tris, int tris_offs, int vert_offs, int size, int stride)
+    {
+        for (int i = 0; i < size; ++i)
+        {
+            tris[tris_offs++] = vert_offs + i;
+            tris[tris_offs++] = vert_offs + (i + 1) % size;
+            tris[tris_offs++] = vert_offs + i + stride;
+            tris[tris_offs++] = vert_offs + (i + 1) % size + stride;
+            tris[tris_offs++] = vert_offs + i + stride;
+            tris[tris_offs++] = vert_offs + (i + 1) % size;
+        }
+    }
 
+    // Set up the index buffers (only done once) and then call UpdateMesh() to setup the verts
+    void GenerateMesh()
+    {
+        for (int i = 0; i < n_points - 1; ++i)
+        {
+            TriangleLoop(vtris, i * vtris_per_point, i * vverts_per_point, 2, vverts_per_point);
+            TriangleLoop(ptris, i * ptris_per_point, i * pverts_per_point, pverts_per_point, pverts_per_point);
+        }
+        UpdateMesh();
+    }
+
+    void UpdateMesh()
+    {
         Vector3 forward = (control_a - pos_a).normalized;
         Vector3 up = up_a;
         Vector3 right = Vector3.Cross(forward, up).normalized;
         Vector3 pos = pos_a, last_pos = pos_a;
 
-        verts = new Vector3[n_points * verts_per_point];
-        tris = new int[(n_points - 1) * tris_per_point];
-        normals = new Vector3[n_points * verts_per_point];
         for (int i = 0; i < n_points; ++i)
         {
-            // Create triangles if this is not the first pass through the loop
-            if (i != 0)
-            {
-                int tri_base = (i - 1) * tris_per_point;
-                int vert_base = (i - 1) * verts_per_point;
-                tris[tri_base + 0] = vert_base;
-                tris[tri_base + 1] = vert_base + 1;
-                tris[tri_base + 2] = vert_base + 2;
-                tris[tri_base + 3] = vert_base + 3;
-                tris[tri_base + 4] = vert_base + 2;
-                tris[tri_base + 5] = vert_base + 1;
-            }
             float t = i / (float)(n_points - 1);
             pos = GetBezier(t);
             if (i != 0)
@@ -62,21 +74,48 @@ public class TrackSegment : MonoBehaviour {
                 up = (up - forward * Vector3.Dot(forward, up)).normalized;
                 right = Vector3.Cross(forward, up).normalized;
             }
-            verts[i * verts_per_point + 0] = pos - right * (0.5f * width);
-            verts[i * verts_per_point + 1] = pos + right * (0.5f * width);
-            normals[i * verts_per_point + 0] = up;
-            normals[i * verts_per_point + 1] = up;
+            vverts[i * vverts_per_point + 0] = pos - right * (0.5f * width);
+            vverts[i * vverts_per_point + 1] = pos + right * (0.5f * width);
+            normals[i * vverts_per_point + 0] = up;
+            normals[i * vverts_per_point + 1] = up;
 
+            pverts[i * pverts_per_point + 0] = pos - right * (0.5f * width) + up * (0.5f * height);
+            pverts[i * pverts_per_point + 1] = pos + right * (0.5f * width) + up * (0.5f * height);
+            pverts[i * pverts_per_point + 2] = pos + right * (0.5f * width) - up * (0.5f * height);
+            pverts[i * pverts_per_point + 3] = pos - right * (0.5f * width) - up * (0.5f * height);
             last_pos = pos;
         }
-           
-        mesh.vertices = verts;
-        mesh.triangles = tris;
-        mesh.normals = normals;
+
+        vmesh.vertices = vverts;
+        vmesh.triangles = vtris;
+        vmesh.normals = normals;
+
+        pmesh.vertices = pverts;
+        pmesh.triangles = ptris;
     }
-	
-	// Update is called once per frame
-	void Update () {
+
+	void Start () {
+        MeshFilter mf = gameObject.GetComponent<MeshFilter>();
+        vmesh = new Mesh();
+        mf.mesh = vmesh;
+
+        vverts = new Vector3[n_points * vverts_per_point];
+        vtris = new int[(n_points - 1) * vtris_per_point];
+        normals = new Vector3[n_points * vverts_per_point];
+
+        pmesh = new Mesh();
+
+        pverts = new Vector3[n_points * pverts_per_point];
+        ptris = new int[(n_points - 1) * ptris_per_point];
+        GenerateMesh();
+
+        MeshCollider mc = gameObject.AddComponent<MeshCollider>();
+        mc.sharedMesh = pmesh;
+
+    }
+
+    // Update is called once per frame
+    void Update () {
 	
 	}
 }
